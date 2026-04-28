@@ -126,7 +126,7 @@ float4 MainPS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
 		float4 Color = SourceTexture.SampleLevel(SourceSampler, SampleUV, 0.0f);
 		if (UseNormalWeight != 0)
 		{
-			float3 FaceNormal = normalize(cross(World1.xyz - World0.xyz, World2.xyz - World0.xyz));
+			float3 FaceNormal = normalize(cross(World2.xyz - World0.xyz, World1.xyz - World0.xyz));
 			float3 ViewDir = normalize(ProjectionCameraLocation - WorldPos);
 			Color *= saturate(dot(FaceNormal, ViewDir));
 		}
