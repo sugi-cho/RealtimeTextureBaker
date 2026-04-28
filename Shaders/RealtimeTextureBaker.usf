@@ -20,6 +20,8 @@ float3 ProjectionCameraUp;
 float4 ClearColor;
 float DilationPixels;
 float2 SourceTexelSize;
+Texture2D MaskTexture;
+SamplerState MaskSampler;
 
 float2 ToSampleUV(float3 WorldPos)
 {
@@ -99,6 +101,12 @@ float4 MainPS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
 				continue;
 			}
 		}
+		else if (BakeMode == 2)
+		{
+			BestColor = float4(1.0f, 1.0f, 1.0f, 1.0f);
+			bHasHit = true;
+			continue;
+		}
 		else
 		{
 			SampleUV = Bary.x * Packed0.zw + Bary.y * Packed1.zw + Bary.z * Packed2.zw;
@@ -146,6 +154,12 @@ float4 DilatePS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
 	float2 UV = UVAndScreenPos.xy;
 	float4 CenterColor = SourceTexture.SampleLevel(SourceSampler, UV, 0.0f);
 	if (!IsClearColor(CenterColor))
+	{
+		return CenterColor;
+	}
+
+	float4 MaskColor = MaskTexture.SampleLevel(MaskSampler, UV, 0.0f);
+	if (MaskColor.r > 0.5f)
 	{
 		return CenterColor;
 	}

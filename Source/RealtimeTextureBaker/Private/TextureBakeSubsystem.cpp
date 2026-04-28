@@ -64,6 +64,8 @@ public:
 	BEGIN_SHADER_PARAMETER_STRUCT(FParameters, )
 		SHADER_PARAMETER_TEXTURE(Texture2D, SourceTexture)
 		SHADER_PARAMETER_SAMPLER(SamplerState, SourceSampler)
+		SHADER_PARAMETER_TEXTURE(Texture2D, MaskTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, MaskSampler)
 		SHADER_PARAMETER(float, DilationPixels)
 		SHADER_PARAMETER(FVector2f, SourceTexelSize)
 		SHADER_PARAMETER(FLinearColor, ClearColor)
@@ -278,6 +280,7 @@ static bool DispatchDilationPass(
 	UWorld* World,
 	UTextureRenderTarget2D* SourceRenderTarget,
 	UTextureRenderTarget2D* DestRenderTarget,
+	UTextureRenderTarget2D* MaskRenderTarget,
 	const FRealtimeTextureBakeSettings& Settings)
 {
 	if (!World || !SourceRenderTarget || !DestRenderTarget || Settings.DilationPixels <= 0)
@@ -287,14 +290,16 @@ static bool DispatchDilationPass(
 
 	FTextureRenderTargetResource* SourceResource = SourceRenderTarget->GameThread_GetRenderTargetResource();
 	FTextureRenderTargetResource* DestResource = DestRenderTarget->GameThread_GetRenderTargetResource();
-	if (!SourceResource || !DestResource)
+	FTextureRenderTargetResource* MaskResource = MaskRenderTarget ? MaskRenderTarget->GameThread_GetRenderTargetResource() : nullptr;
+	if (!SourceResource || !DestResource || !MaskResource)
 	{
 		return false;
 	}
 
 	FRHITexture* SourceTexture = SourceResource->GetRenderTargetTexture();
 	FRHITexture* DestTexture = DestResource->GetRenderTargetTexture();
-	if (!SourceTexture || !DestTexture)
+	FRHITexture* MaskTextureRHI = MaskResource->GetRenderTargetTexture();
+	if (!SourceTexture || !DestTexture || !MaskTextureRHI)
 	{
 		return false;
 	}
@@ -310,7 +315,7 @@ static bool DispatchDilationPass(
 		1.0f / FMath::Max(1, Extent.Y));
 
 	ENQUEUE_RENDER_COMMAND(RealtimeTextureBakerDilate)(
-		[SourceTexture, DestTexture, SourceSampler, OutputViewport, InputViewport, ViewInfo, Settings, SourceTexelSize](FRHICommandListImmediate& RHICmdList)
+		[SourceTexture, DestTexture, MaskTextureRHI, SourceSampler, OutputViewport, InputViewport, ViewInfo, Settings, SourceTexelSize](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHIRenderPassInfo RenderPassInfo(DestTexture, ERenderTargetActions::Load_Store);
 			RHICmdList.BeginRenderPass(RenderPassInfo, TEXT("RealtimeTextureBakerDilate"));
@@ -322,6 +327,8 @@ static bool DispatchDilationPass(
 			FDilateProjectionPS::FParameters Parameters = {};
 			Parameters.SourceTexture = SourceTexture;
 			Parameters.SourceSampler = SourceSampler;
+			Parameters.MaskTexture = MaskTextureRHI;
+			Parameters.MaskSampler = SourceSampler;
 			Parameters.DilationPixels = static_cast<float>(Settings.DilationPixels);
 			Parameters.SourceTexelSize = SourceTexelSize;
 			Parameters.ClearColor = Settings.ClearColor;
@@ -362,6 +369,24 @@ UTextureRenderTarget2D* UTextureBakeSubsystem::GetTempRenderTarget(const FRealti
 		TempRenderTarget = CreateBakeRenderTarget(Settings);
 	}
 	return TempRenderTarget;
+}
+
+UTextureRenderTarget2D* UTextureBakeSubsystem::GetMaskRenderTarget(const FRealtimeTextureBakeSettings& Settings)
+{
+	const int32 Resolution = Settings.GetClampedResolution();
+	if (MaskRenderTarget)
+	{
+		if (MaskRenderTarget->SizeX != Resolution || MaskRenderTarget->SizeY != Resolution || MaskRenderTarget->RenderTargetFormat != Settings.RenderTargetFormat)
+		{
+			MaskRenderTarget = nullptr;
+		}
+	}
+
+	if (!MaskRenderTarget)
+	{
+		MaskRenderTarget = CreateBakeRenderTarget(Settings);
+	}
+	return MaskRenderTarget;
 }
 
 UTextureRenderTarget2D* UTextureBakeSubsystem::CreateBakeRenderTarget(const FRealtimeTextureBakeSettings& Settings)
@@ -419,14 +444,26 @@ bool UTextureBakeSubsystem::BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, 
 			return false;
 		}
 
+		UTextureRenderTarget2D* LocalMaskRenderTarget = GetMaskRenderTarget(Settings);
+		if (!LocalMaskRenderTarget)
+		{
+			return false;
+		}
+
 		ClearBakeRenderTarget(LocalTempRenderTarget, Settings.ClearColor);
+		ClearBakeRenderTarget(LocalMaskRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
+
+		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 2, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
+		{
+			return false;
+		}
 
 		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
 		{
 			return false;
 		}
 
-		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, Settings);
+		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, LocalMaskRenderTarget, Settings);
 	}
 
 	return DispatchBakePass(World, RenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f);
@@ -482,14 +519,26 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 			return false;
 		}
 
+		UTextureRenderTarget2D* LocalMaskRenderTarget = GetMaskRenderTarget(Settings);
+		if (!LocalMaskRenderTarget)
+		{
+			return false;
+		}
+
 		ClearBakeRenderTarget(LocalTempRenderTarget, Settings.ClearColor);
+		ClearBakeRenderTarget(LocalMaskRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
+
+		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 2, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
+		{
+			return false;
+		}
 
 		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
 		{
 			return false;
 		}
 
-		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, Settings);
+		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, LocalMaskRenderTarget, Settings);
 	}
 
 	return DispatchBakePass(World, RenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio);

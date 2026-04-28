@@ -24,6 +24,7 @@ public:
 	void ClearBakeRenderTarget(UTextureRenderTarget2D* RenderTarget, FLinearColor ClearColor);
 
 	UTextureRenderTarget2D* GetTempRenderTarget(const FRealtimeTextureBakeSettings& Settings);
+	UTextureRenderTarget2D* GetMaskRenderTarget(const FRealtimeTextureBakeSettings& Settings);
 
 	UFUNCTION(BlueprintCallable, Category = "Realtime Texture Baker")
 	bool BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, const FRealtimeTextureBakeSettings& Settings);
@@ -34,4 +35,7 @@ public:
 private:
 	UPROPERTY(Transient)
 	UTextureRenderTarget2D* TempRenderTarget;
+
+	UPROPERTY(Transient)
+	UTextureRenderTarget2D* MaskRenderTarget;
 };
