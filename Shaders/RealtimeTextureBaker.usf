@@ -4,23 +4,24 @@
 static const int MaxPackedFloat4s = 3072;
 
 float4 TriangleData[3072];
-Texture2D SourceTexture;
-SamplerState SourceSampler;
-Texture2D DepthTexture;
-SamplerState DepthSampler;
-
 int TriangleCount;
 int BakeMode;
 int UseDepthTest;
 int UseNormalWeight;
 float ProjectionCameraFOV;
 float ProjectionCameraAspectRatio;
-float DepthTestThreshold;
 float3 ProjectionCameraLocation;
 float3 ProjectionCameraForward;
 float3 ProjectionCameraRight;
 float3 ProjectionCameraUp;
 float4 ClearColor;
+float DepthTestThreshold;
+
+Texture2D SourceTexture;
+SamplerState SourceSampler;
+Texture2D DepthTexture;
+SamplerState DepthSampler;
+
 float DilationPixels;
 float2 SourceTexelSize;
 Texture2D MaskTexture;
