@@ -38,6 +38,7 @@ public:
 		SHADER_PARAMETER(int32, UseNormalWeight)
 		SHADER_PARAMETER(float, ProjectionCameraFOV)
 		SHADER_PARAMETER(float, ProjectionCameraAspectRatio)
+		SHADER_PARAMETER(float, DepthTestThreshold)
 		SHADER_PARAMETER(FVector3f, ProjectionCameraLocation)
 		SHADER_PARAMETER(FVector3f, ProjectionCameraForward)
 		SHADER_PARAMETER(FVector3f, ProjectionCameraRight)
@@ -45,6 +46,8 @@ public:
 		SHADER_PARAMETER(FLinearColor, ClearColor)
 		SHADER_PARAMETER_TEXTURE(Texture2D, SourceTexture)
 		SHADER_PARAMETER_SAMPLER(SamplerState, SourceSampler)
+		SHADER_PARAMETER_TEXTURE(Texture2D, DepthTexture)
+		SHADER_PARAMETER_SAMPLER(SamplerState, DepthSampler)
 	END_SHADER_PARAMETER_STRUCT()
 
 	static bool ShouldCompilePermutation(const FGlobalShaderPermutationParameters&)
@@ -182,6 +185,7 @@ static bool DispatchBakePass(
 	UWorld* World,
 	UTextureRenderTarget2D* RenderTarget,
 	UTexture* SourceTexture,
+	UTextureRenderTarget2D* DepthRenderTarget,
 	const TArray<FVector4f>& PackedTriangleData,
 	int32 TriangleCount,
 	int32 BakeMode,
@@ -200,6 +204,7 @@ static bool DispatchBakePass(
 
 	FTextureRenderTargetResource* RenderTargetResource = RenderTarget->GameThread_GetRenderTargetResource();
 	FTextureResource* SourceResource = SourceTexture->GetResource();
+	FTextureRenderTargetResource* DepthRenderTargetResource = DepthRenderTarget ? DepthRenderTarget->GameThread_GetRenderTargetResource() : nullptr;
 	if (!RenderTargetResource || !SourceResource || !SourceResource->TextureRHI)
 	{
 		return false;
@@ -207,9 +212,21 @@ static bool DispatchBakePass(
 
 	FRHITexture* OutputTexture = RenderTargetResource->GetRenderTargetTexture();
 	FRHITexture* InputTexture = SourceResource->TextureRHI;
+	FRHITexture* DepthTexture = DepthRenderTargetResource ? DepthRenderTargetResource->GetRenderTargetTexture() : nullptr;
 	if (!OutputTexture || !InputTexture)
 	{
 		return false;
+	}
+
+	if (BakeMode == 1 && Settings.bUseDepthTest && !DepthTexture)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: DepthRenderTarget is invalid while depth testing is enabled."));
+		return false;
+	}
+
+	if (!DepthTexture)
+	{
+		DepthTexture = InputTexture;
 	}
 
 	FRHISamplerState* SourceSampler = TStaticSamplerState<SF_Bilinear, AM_Clamp, AM_Clamp, AM_Clamp>::GetRHI();
@@ -222,7 +239,7 @@ static bool DispatchBakePass(
 	TArray<FVector4f> TrianglePayload = PackedTriangleData;
 
 	ENQUEUE_RENDER_COMMAND(RealtimeTextureBakerRender)(
-		[OutputTexture, InputTexture, SourceSampler, OutputViewport, InputViewport, ViewInfo, TrianglePayload = MoveTemp(TrianglePayload), TriangleCount, BakeMode, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio](FRHICommandListImmediate& RHICmdList)
+		[OutputTexture, InputTexture, DepthTexture, SourceSampler, OutputViewport, InputViewport, ViewInfo, TrianglePayload = MoveTemp(TrianglePayload), TriangleCount, BakeMode, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHIRenderPassInfo RenderPassInfo(OutputTexture, ERenderTargetActions::Load_Store);
 			RHICmdList.BeginRenderPass(RenderPassInfo, TEXT("RealtimeTextureBaker"));
@@ -255,6 +272,9 @@ static bool DispatchBakePass(
 				Parameters.ClearColor = Settings.ClearColor;
 				Parameters.SourceTexture = InputTexture;
 				Parameters.SourceSampler = SourceSampler;
+				Parameters.DepthTexture = DepthTexture;
+				Parameters.DepthSampler = SourceSampler;
+				Parameters.DepthTestThreshold = Settings.DepthTestThreshold;
 
 				DrawScreenPass(
 					RHICmdList,
@@ -453,12 +473,12 @@ bool UTextureBakeSubsystem::BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, 
 		ClearBakeRenderTarget(LocalTempRenderTarget, Settings.ClearColor);
 		ClearBakeRenderTarget(LocalMaskRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 
-		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 2, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
+		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 2, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
 		{
 			return false;
 		}
 
-		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
+		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
 		{
 			return false;
 		}
@@ -466,10 +486,10 @@ bool UTextureBakeSubsystem::BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, 
 		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, LocalMaskRenderTarget, Settings);
 	}
 
-	return DispatchBakePass(World, RenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f);
+	return DispatchBakePass(World, RenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f);
 }
 
-bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* TargetMesh, ACameraActor* ProjectionCamera, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, const FRealtimeTextureBakeSettings& Settings)
+bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* TargetMesh, ACameraActor* ProjectionCamera, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, UTextureRenderTarget2D* DepthRenderTarget, const FRealtimeTextureBakeSettings& Settings)
 {
 	if (!ProjectionCamera)
 	{
@@ -528,12 +548,12 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 		ClearBakeRenderTarget(LocalTempRenderTarget, Settings.ClearColor);
 		ClearBakeRenderTarget(LocalMaskRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 
-		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 2, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
+		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 2, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
 		{
 			return false;
 		}
 
-		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
+		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, DepthRenderTarget, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
 		{
 			return false;
 		}
@@ -541,5 +561,5 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, LocalMaskRenderTarget, Settings);
 	}
 
-	return DispatchBakePass(World, RenderTarget, SourceTexture, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio);
+	return DispatchBakePass(World, RenderTarget, SourceTexture, DepthRenderTarget, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio);
 }

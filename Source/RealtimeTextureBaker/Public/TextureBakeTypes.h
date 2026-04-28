@@ -38,6 +38,9 @@ struct REALTIMETEXTUREBAKER_API FRealtimeTextureBakeSettings
 	TEnumAsByte<ETextureRenderTargetFormat> RenderTargetFormat = RTF_RGBA8;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
+	TEnumAsByte<ETextureRenderTargetFormat> DepthRenderTargetFormat = RTF_R32f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
 	FLinearColor ClearColor = FLinearColor::Transparent;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
@@ -45,6 +48,9 @@ struct REALTIMETEXTUREBAKER_API FRealtimeTextureBakeSettings
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projection")
 	bool bUseDepthTest = false;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projection", meta = (ClampMin = "0.0", ClampMax = "1000.0"))
+	float DepthTestThreshold = 0.0001f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Projection")
 	bool bUseNormalWeight = false;

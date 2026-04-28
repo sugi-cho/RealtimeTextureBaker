@@ -30,7 +30,7 @@ public:
 	bool BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, const FRealtimeTextureBakeSettings& Settings);
 
 	UFUNCTION(BlueprintCallable, Category = "Realtime Texture Baker")
-	bool BakeCameraProjectionToUV(UStaticMeshComponent* TargetMesh, ACameraActor* ProjectionCamera, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, const FRealtimeTextureBakeSettings& Settings);
+	bool BakeCameraProjectionToUV(UStaticMeshComponent* TargetMesh, ACameraActor* ProjectionCamera, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, UTextureRenderTarget2D* DepthRenderTarget, const FRealtimeTextureBakeSettings& Settings);
 
 private:
 	UPROPERTY(Transient)

@@ -6,6 +6,7 @@
 #include "BakeProjectionActor.generated.h"
 
 class UCameraComponent;
+class USceneCaptureComponent2D;
 class ACameraActor;
 class AStaticMeshActor;
 class UTexture;
@@ -20,6 +21,7 @@ public:
 	ABakeProjectionActor();
 
 	virtual void Tick(float DeltaSeconds) override;
+	virtual void OnConstruction(const FTransform& Transform) override;
 
 #if WITH_EDITOR
 	virtual bool ShouldTickIfViewportsOnly() const override;
@@ -40,13 +42,20 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
 	FRealtimeTextureBakeSettings Settings;
 
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Bake")
+	USceneCaptureComponent2D* DepthCapture = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
+	UTextureRenderTarget2D* DepthRenderTarget = nullptr;
+
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
 	UTextureRenderTarget2D* OutputRenderTarget = nullptr;
 
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
-	UTextureRenderTarget2D* AllocateRenderTarget();
+	UTextureRenderTarget2D* AllocateDepthRenderTarget(float AspectRatio = 1.0f);
 
-	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
+	UTextureRenderTarget2D* AllocateRenderTarget();
+	void UpdateDepthCaptureFromProjectionCamera();
 	bool BakeUVTexture();
 
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
