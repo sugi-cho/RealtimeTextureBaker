@@ -36,8 +36,8 @@ float2 ToSampleUV(float3 WorldPos)
 	float Up = dot(Relative, ProjectionCameraUp);
 	float HalfFovTan = tan(radians(ProjectionCameraFOV * 0.5f));
 	float2 SampleUV = float2(
-		(Right / (Depth * HalfFovTan * ProjectionCameraAspectRatio)) * 0.5f + 0.5f,
-		(-Up / (Depth * HalfFovTan)) * 0.5f + 0.5f);
+		(Right / (Depth * HalfFovTan)) * 0.5f + 0.5f,
+		(-Up / (Depth * HalfFovTan / ProjectionCameraAspectRatio)) * 0.5f + 0.5f);
 	return SampleUV;
 }
 

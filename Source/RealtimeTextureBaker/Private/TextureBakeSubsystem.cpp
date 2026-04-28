@@ -217,7 +217,7 @@ static bool DispatchBakePass(
 	const FIntRect OutputRect(FIntPoint::ZeroValue, OutputExtent);
 	const FScreenPassTextureViewport OutputViewport(OutputExtent, OutputRect);
 	const FScreenPassTextureViewport InputViewport(OutputExtent, OutputRect);
-	const FScreenPassViewInfo ViewInfo(GMaxRHIFeatureLevel);
+	const FScreenPassViewInfo ViewInfo;
 
 	TArray<FVector4f> TrianglePayload = PackedTriangleData;
 
@@ -309,7 +309,7 @@ static bool DispatchDilationPass(
 	const FIntRect Rect(FIntPoint::ZeroValue, Extent);
 	const FScreenPassTextureViewport OutputViewport(Extent, Rect);
 	const FScreenPassTextureViewport InputViewport(Extent, Rect);
-	const FScreenPassViewInfo ViewInfo(GMaxRHIFeatureLevel);
+	const FScreenPassViewInfo ViewInfo;
 	const FVector2f SourceTexelSize(
 		1.0f / FMath::Max(1, Extent.X),
 		1.0f / FMath::Max(1, Extent.Y));
