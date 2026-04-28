@@ -1,0 +1,23 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "0.1.0",
+	"FriendlyName": "Realtime Texture Baker",
+	"Description": "Runtime texture baking and mesh projection baking into UV-space render targets.",
+	"Category": "Rendering",
+	"CreatedBy": "sugi-cho",
+	"CanContainContent": true,
+	"IsBetaVersion": true,
+	"Modules": [
+		{
+			"Name": "RealtimeTextureBaker",
+			"Type": "Runtime",
+			"LoadingPhase": "PostConfigInit"
+		},
+		{
+			"Name": "RealtimeTextureBakerEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default"
+		}
+	]
+}

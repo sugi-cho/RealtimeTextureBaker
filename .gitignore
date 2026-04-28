@@ -1,0 +1,9 @@
+Binaries/
+Intermediate/
+.vs/
+*.sln
+*.suo
+*.sdf
+*.VC.db
+.DS_Store
+Thumbs.db

@@ -1,0 +1,179 @@
+#include "/Engine/Public/Platform.ush"
+#include "/Engine/Private/ScreenPass.ush"
+
+static const int MaxPackedFloat4s = 3072;
+
+float4 TriangleData[3072];
+Texture2D SourceTexture;
+SamplerState SourceSampler;
+
+int TriangleCount;
+int BakeMode;
+int UseDepthTest;
+int UseNormalWeight;
+float ProjectionCameraFOV;
+float ProjectionCameraAspectRatio;
+float3 ProjectionCameraLocation;
+float3 ProjectionCameraForward;
+float3 ProjectionCameraRight;
+float3 ProjectionCameraUp;
+float4 ClearColor;
+float DilationPixels;
+float2 SourceTexelSize;
+
+float2 ToSampleUV(float3 WorldPos)
+{
+	float3 Relative = WorldPos - ProjectionCameraLocation;
+	float Depth = dot(Relative, ProjectionCameraForward);
+	if (Depth <= 0.0001f)
+	{
+		return float2(-1.0f, -1.0f);
+	}
+
+	float Right = dot(Relative, ProjectionCameraRight);
+	float Up = dot(Relative, ProjectionCameraUp);
+	float HalfFovTan = tan(radians(ProjectionCameraFOV * 0.5f));
+	float2 SampleUV = float2(
+		(Right / (Depth * HalfFovTan * ProjectionCameraAspectRatio)) * 0.5f + 0.5f,
+		(-Up / (Depth * HalfFovTan)) * 0.5f + 0.5f);
+	return SampleUV;
+}
+
+float3 Barycentric(float2 P, float2 A, float2 B, float2 C)
+{
+	float2 V0 = B - A;
+	float2 V1 = C - A;
+	float2 V2 = P - A;
+	float Denominator = V0.x * V1.y - V1.x * V0.y;
+	if (abs(Denominator) < 1e-8f)
+	{
+		return float3(-1.0f, -1.0f, -1.0f);
+	}
+
+	float InvDenominator = 1.0f / Denominator;
+	float V = (V2.x * V1.y - V1.x * V2.y) * InvDenominator;
+	float W = (V0.x * V2.y - V2.x * V0.y) * InvDenominator;
+	float U = 1.0f - V - W;
+	return float3(U, V, W);
+}
+
+float4 MainPS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
+{
+	float2 TargetUV = UVAndScreenPos.xy;
+	float4 BestColor = ClearColor;
+	float BestDepth = 3.4e38f;
+	bool bHasHit = false;
+
+	[loop]
+	for (int TriangleIndex = 0; TriangleIndex < TriangleCount; ++TriangleIndex)
+	{
+		int BaseIndex = TriangleIndex * 6;
+		if (BaseIndex + 5 >= MaxPackedFloat4s)
+		{
+			break;
+		}
+
+		float4 Packed0 = TriangleData[BaseIndex + 0];
+		float4 Packed1 = TriangleData[BaseIndex + 1];
+		float4 Packed2 = TriangleData[BaseIndex + 2];
+		float4 World0 = TriangleData[BaseIndex + 3];
+		float4 World1 = TriangleData[BaseIndex + 4];
+		float4 World2 = TriangleData[BaseIndex + 5];
+
+		float3 Bary = Barycentric(TargetUV, Packed0.xy, Packed1.xy, Packed2.xy);
+		if (Bary.x < -0.0001f || Bary.y < -0.0001f || Bary.z < -0.0001f)
+		{
+			continue;
+		}
+
+		float3 WorldPos = Bary.x * World0.xyz + Bary.y * World1.xyz + Bary.z * World2.xyz;
+		float2 SampleUV;
+		float Depth = 0.0f;
+
+		if (BakeMode == 1)
+		{
+			SampleUV = ToSampleUV(WorldPos);
+			Depth = dot(WorldPos - ProjectionCameraLocation, ProjectionCameraForward);
+			if (SampleUV.x < 0.0f || SampleUV.x > 1.0f || SampleUV.y < 0.0f || SampleUV.y > 1.0f)
+			{
+				continue;
+			}
+		}
+		else
+		{
+			SampleUV = Bary.x * Packed0.zw + Bary.y * Packed1.zw + Bary.z * Packed2.zw;
+		}
+
+		float4 Color = SourceTexture.SampleLevel(SourceSampler, SampleUV, 0.0f);
+		if (UseNormalWeight != 0)
+		{
+			float3 FaceNormal = normalize(cross(World1.xyz - World0.xyz, World2.xyz - World0.xyz));
+			float3 ViewDir = normalize(ProjectionCameraLocation - WorldPos);
+			Color *= saturate(dot(FaceNormal, ViewDir));
+		}
+
+		if (UseDepthTest != 0)
+		{
+			if (!bHasHit || Depth < BestDepth)
+			{
+				BestDepth = Depth;
+				BestColor = Color;
+				bHasHit = true;
+			}
+		}
+		else
+		{
+			BestColor = Color;
+			bHasHit = true;
+		}
+	}
+
+	if (!bHasHit)
+	{
+		discard;
+	}
+
+	return BestColor;
+}
+
+bool IsClearColor(float4 Color)
+{
+	return all(abs(Color - ClearColor) <= 0.0001f);
+}
+
+float4 DilatePS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
+{
+	float2 UV = UVAndScreenPos.xy;
+	float4 CenterColor = SourceTexture.SampleLevel(SourceSampler, UV, 0.0f);
+	if (!IsClearColor(CenterColor))
+	{
+		return CenterColor;
+	}
+
+	int Radius = max(0, (int)round(DilationPixels));
+	[loop]
+	for (int Step = 1; Step <= Radius; ++Step)
+	{
+		[loop]
+		for (int Y = -Step; Y <= Step; ++Y)
+		{
+			[loop]
+			for (int X = -Step; X <= Step; ++X)
+			{
+				float2 SampleUV = UV + float2(X, Y) * SourceTexelSize;
+				if (SampleUV.x < 0.0f || SampleUV.x > 1.0f || SampleUV.y < 0.0f || SampleUV.y > 1.0f)
+				{
+					continue;
+				}
+
+				float4 SampleColor = SourceTexture.SampleLevel(SourceSampler, SampleUV, 0.0f);
+				if (!IsClearColor(SampleColor))
+				{
+					return SampleColor;
+				}
+			}
+		}
+	}
+
+	return CenterColor;
+}
