@@ -1,9 +1,9 @@
 #include "/Engine/Public/Platform.ush"
 #include "/Engine/Private/ScreenPass.ush"
 
-static const int MaxPackedFloat4s = 3072;
+static const int MaxPackedFloat4s = 6;
 
-float4 TriangleData[3072];
+float4 TriangleData[6];
 int TriangleCount;
 int BakeMode;
 int UseDepthTest;
@@ -66,94 +66,58 @@ float3 Barycentric(float2 P, float2 A, float2 B, float2 C)
 float4 MainPS(noperspective float4 UVAndScreenPos : TEXCOORD0) : SV_Target0
 {
 	float2 TargetUV = UVAndScreenPos.xy;
-	float4 BestColor = ClearColor;
-	float BestDepth = 3.4e38f;
-	bool bHasHit = false;
+	float4 Packed0 = TriangleData[0];
+	float4 Packed1 = TriangleData[1];
+	float4 Packed2 = TriangleData[2];
+	float4 World0 = TriangleData[3];
+	float4 World1 = TriangleData[4];
+	float4 World2 = TriangleData[5];
 
-	[loop]
-	for (int TriangleIndex = 0; TriangleIndex < TriangleCount; ++TriangleIndex)
-	{
-		int BaseIndex = TriangleIndex * 6;
-		if (BaseIndex + 5 >= MaxPackedFloat4s)
-		{
-			break;
-		}
-
-		float4 Packed0 = TriangleData[BaseIndex + 0];
-		float4 Packed1 = TriangleData[BaseIndex + 1];
-		float4 Packed2 = TriangleData[BaseIndex + 2];
-		float4 World0 = TriangleData[BaseIndex + 3];
-		float4 World1 = TriangleData[BaseIndex + 4];
-		float4 World2 = TriangleData[BaseIndex + 5];
-
-		float3 Bary = Barycentric(TargetUV, Packed0.xy, Packed1.xy, Packed2.xy);
-		if (Bary.x < -0.0001f || Bary.y < -0.0001f || Bary.z < -0.0001f)
-		{
-			continue;
-		}
-
-		float3 WorldPos = Bary.x * World0.xyz + Bary.y * World1.xyz + Bary.z * World2.xyz;
-		float2 SampleUV;
-		float Depth = 0.0f;
-
-		if (BakeMode == 1)
-		{
-			SampleUV = ToSampleUV(WorldPos);
-			Depth = dot(WorldPos - ProjectionCameraLocation, ProjectionCameraForward);
-			if (SampleUV.x < 0.0f || SampleUV.x > 1.0f || SampleUV.y < 0.0f || SampleUV.y > 1.0f)
-			{
-				continue;
-			}
-			if (UseDepthTest != 0)
-			{
-				float SceneDepth = DepthTexture.SampleLevel(DepthSampler, SampleUV, 0.0f).r;
-				if (Depth > SceneDepth + DepthTestThreshold)
-				{
-					continue;
-				}
-			}
-		}
-		else if (BakeMode == 2)
-		{
-			BestColor = float4(1.0f, 1.0f, 1.0f, 1.0f);
-			bHasHit = true;
-			continue;
-		}
-		else
-		{
-			SampleUV = Bary.x * Packed0.zw + Bary.y * Packed1.zw + Bary.z * Packed2.zw;
-		}
-
-		float4 Color = SourceTexture.SampleLevel(SourceSampler, SampleUV, 0.0f);
-		if (UseNormalWeight != 0)
-		{
-			float3 FaceNormal = normalize(cross(World2.xyz - World0.xyz, World1.xyz - World0.xyz));
-			float3 ViewDir = normalize(ProjectionCameraLocation - WorldPos);
-			Color *= saturate(dot(FaceNormal, ViewDir));
-		}
-
-		if (UseDepthTest != 0)
-		{
-			if (!bHasHit || Depth < BestDepth)
-			{
-				BestDepth = Depth;
-				BestColor = Color;
-				bHasHit = true;
-			}
-		}
-		else
-		{
-			BestColor = Color;
-			bHasHit = true;
-		}
-	}
-
-	if (!bHasHit)
+	float3 Bary = Barycentric(TargetUV, Packed0.xy, Packed1.xy, Packed2.xy);
+	if (Bary.x < -0.0001f || Bary.y < -0.0001f || Bary.z < -0.0001f)
 	{
 		discard;
 	}
 
-	return BestColor;
+	float3 WorldPos = Bary.x * World0.xyz + Bary.y * World1.xyz + Bary.z * World2.xyz;
+	float2 SampleUV;
+	float Depth = 0.0f;
+
+	if (BakeMode == 1)
+	{
+		SampleUV = ToSampleUV(WorldPos);
+		Depth = dot(WorldPos - ProjectionCameraLocation, ProjectionCameraForward);
+		if (SampleUV.x < 0.0f || SampleUV.x > 1.0f || SampleUV.y < 0.0f || SampleUV.y > 1.0f)
+		{
+			discard;
+		}
+		if (UseDepthTest != 0)
+		{
+			float SceneDepth = DepthTexture.SampleLevel(DepthSampler, SampleUV, 0.0f).r;
+			if (Depth > SceneDepth + DepthTestThreshold)
+			{
+				discard;
+			}
+		}
+	}
+	else if (BakeMode == 2)
+	{
+		return float4(1.0f, 1.0f, 1.0f, 1.0f);
+	}
+	else
+	{
+		SampleUV = Bary.x * Packed0.zw + Bary.y * Packed1.zw + Bary.z * Packed2.zw;
+	}
+
+	float4 Color = SourceTexture.SampleLevel(SourceSampler, SampleUV, 0.0f);
+	if (UseNormalWeight != 0)
+	{
+		float3 FaceNormal = normalize(cross(World2.xyz - World0.xyz, World1.xyz - World0.xyz));
+		float3 ViewDir = normalize(ProjectionCameraLocation - WorldPos);
+		Color *= saturate(dot(FaceNormal, ViewDir));
+	}
+
+	return Color;
 }
 
 bool IsClearColor(float4 Color)

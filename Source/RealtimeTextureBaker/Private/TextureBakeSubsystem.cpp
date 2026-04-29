@@ -21,8 +21,14 @@
 namespace
 {
 constexpr int32 PackedFloat4sPerTriangle = 6;
-constexpr int32 MaxBakeTrianglesPerPass = 512;
-constexpr int32 MaxPackedFloat4sPerPass = MaxBakeTrianglesPerPass * PackedFloat4sPerTriangle;
+constexpr int32 MaxPackedFloat4sPerPass = PackedFloat4sPerTriangle;
+
+struct FBakeTriangleData
+{
+	FVector4f Packed[PackedFloat4sPerTriangle];
+	FIntRect Bounds = FIntRect(0, 0, 0, 0);
+	float DepthSortKey = 0.0f;
+};
 
 class FBakeProjectionPS : public FGlobalShader
 {
@@ -82,15 +88,17 @@ public:
 
 IMPLEMENT_GLOBAL_SHADER(FDilateProjectionPS, "/RealtimeTextureBaker/RealtimeTextureBaker.usf", "DilatePS", SF_Pixel);
 
-static bool ExtractBakeTriangles(
+static bool BuildBakeTriangles(
 	UStaticMeshComponent* TargetMeshComponent,
 	const int32 TargetUVChannel,
 	const int32 SourceUVChannel,
-	TArray<FVector4f>& OutPackedTriangleData,
-	int32& OutTriangleCount)
+	const FIntPoint& OutputExtent,
+	const bool bSortByDepth,
+	const FVector3f& CameraLocation,
+	const FVector3f& CameraForward,
+	TArray<FBakeTriangleData>& OutTriangles)
 {
-	OutPackedTriangleData.Reset();
-	OutTriangleCount = 0;
+	OutTriangles.Reset();
 
 	if (!TargetMeshComponent)
 	{
@@ -139,7 +147,7 @@ static bool ExtractBakeTriangles(
 		return false;
 	}
 
-	OutPackedTriangleData.Reserve(TotalTriangles * PackedFloat4sPerTriangle);
+	OutTriangles.Reserve(TotalTriangles);
 
 	for (const FStaticMeshSection& Section : LODResources.Sections)
 	{
@@ -167,27 +175,50 @@ static bool ExtractBakeTriangles(
 			const FVector2f SourceUV1 = VertexBuffer.GetVertexUV(I1, SourceUVChannel);
 			const FVector2f SourceUV2 = VertexBuffer.GetVertexUV(I2, SourceUVChannel);
 
-			OutPackedTriangleData.Add(FVector4f(TargetUV0.X, TargetUV0.Y, SourceUV0.X, SourceUV0.Y));
-			OutPackedTriangleData.Add(FVector4f(TargetUV1.X, TargetUV1.Y, SourceUV1.X, SourceUV1.Y));
-			OutPackedTriangleData.Add(FVector4f(TargetUV2.X, TargetUV2.Y, SourceUV2.X, SourceUV2.Y));
-			OutPackedTriangleData.Add(FVector4f(P0, 0.0f));
-			OutPackedTriangleData.Add(FVector4f(P1, 0.0f));
-			OutPackedTriangleData.Add(FVector4f(P2, 0.0f));
+			FBakeTriangleData& Triangle = OutTriangles.AddDefaulted_GetRef();
+			Triangle.Packed[0] = FVector4f(TargetUV0.X, TargetUV0.Y, SourceUV0.X, SourceUV0.Y);
+			Triangle.Packed[1] = FVector4f(TargetUV1.X, TargetUV1.Y, SourceUV1.X, SourceUV1.Y);
+			Triangle.Packed[2] = FVector4f(TargetUV2.X, TargetUV2.Y, SourceUV2.X, SourceUV2.Y);
+			Triangle.Packed[3] = FVector4f(P0, 0.0f);
+			Triangle.Packed[4] = FVector4f(P1, 0.0f);
+			Triangle.Packed[5] = FVector4f(P2, 0.0f);
 
-			++OutTriangleCount;
+			const float MinU = FMath::Min3(TargetUV0.X, TargetUV1.X, TargetUV2.X);
+			const float MinV = FMath::Min3(TargetUV0.Y, TargetUV1.Y, TargetUV2.Y);
+			const float MaxU = FMath::Max3(TargetUV0.X, TargetUV1.X, TargetUV2.X);
+			const float MaxV = FMath::Max3(TargetUV0.Y, TargetUV1.Y, TargetUV2.Y);
+
+			const int32 MinX = FMath::Clamp(FMath::FloorToInt(MinU * OutputExtent.X), 0, FMath::Max(0, OutputExtent.X - 1));
+			const int32 MinY = FMath::Clamp(FMath::FloorToInt(MinV * OutputExtent.Y), 0, FMath::Max(0, OutputExtent.Y - 1));
+			const int32 MaxX = FMath::Clamp(FMath::CeilToInt(MaxU * OutputExtent.X), MinX + 1, OutputExtent.X);
+			const int32 MaxY = FMath::Clamp(FMath::CeilToInt(MaxV * OutputExtent.Y), MinY + 1, OutputExtent.Y);
+			Triangle.Bounds = FIntRect(FIntPoint(MinX, MinY), FIntPoint(MaxX, MaxY));
+			Triangle.DepthSortKey = bSortByDepth ? FVector3f::DotProduct(((P0 + P1 + P2) / 3.0f) - CameraLocation, CameraForward) : 0.0f;
 		}
 	}
 
-	return OutTriangleCount > 0;
+	OutTriangles.RemoveAllSwap([](const FBakeTriangleData& Triangle)
+	{
+		return Triangle.Bounds.Min.X >= Triangle.Bounds.Max.X || Triangle.Bounds.Min.Y >= Triangle.Bounds.Max.Y;
+	});
+
+	if (bSortByDepth)
+	{
+		OutTriangles.Sort([](const FBakeTriangleData& A, const FBakeTriangleData& B)
+		{
+			return A.DepthSortKey > B.DepthSortKey;
+		});
+	}
+
+	return OutTriangles.Num() > 0;
 }
 
-static bool DispatchBakePass(
+static bool DispatchRasterBakePass(
 	UWorld* World,
 	UTextureRenderTarget2D* RenderTarget,
 	UTexture* SourceTexture,
 	UTextureRenderTarget2D* DepthRenderTarget,
-	const TArray<FVector4f>& PackedTriangleData,
-	int32 TriangleCount,
+	const TArray<FBakeTriangleData>& Triangles,
 	int32 BakeMode,
 	const FRealtimeTextureBakeSettings& Settings,
 	const FVector3f& CameraLocation,
@@ -197,7 +228,7 @@ static bool DispatchBakePass(
 	const float CameraFOV,
 	const float CameraAspectRatio)
 {
-	if (!World || !RenderTarget || !SourceTexture || TriangleCount <= 0 || PackedTriangleData.Num() == 0)
+	if (!World || !RenderTarget || !SourceTexture || Triangles.Num() == 0)
 	{
 		return false;
 	}
@@ -235,11 +266,10 @@ static bool DispatchBakePass(
 	const FScreenPassTextureViewport OutputViewport(OutputExtent, OutputRect);
 	const FScreenPassTextureViewport InputViewport(OutputExtent, OutputRect);
 	const FScreenPassViewInfo ViewInfo;
-
-	TArray<FVector4f> TrianglePayload = PackedTriangleData;
+	TArray<FBakeTriangleData> TrianglePayload = Triangles;
 
 	ENQUEUE_RENDER_COMMAND(RealtimeTextureBakerRender)(
-		[OutputTexture, InputTexture, DepthTexture, SourceSampler, OutputViewport, InputViewport, ViewInfo, TrianglePayload = MoveTemp(TrianglePayload), TriangleCount, BakeMode, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio](FRHICommandListImmediate& RHICmdList)
+		[OutputTexture, InputTexture, DepthTexture, SourceSampler, OutputViewport, InputViewport, ViewInfo, TrianglePayload = MoveTemp(TrianglePayload), BakeMode, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio](FRHICommandListImmediate& RHICmdList)
 		{
 			FRHIRenderPassInfo RenderPassInfo(OutputTexture, ERenderTargetActions::Load_Store);
 			RHICmdList.BeginRenderPass(RenderPassInfo, TEXT("RealtimeTextureBaker"));
@@ -248,18 +278,20 @@ static bool DispatchBakePass(
 			TShaderMapRef<FBakeProjectionPS> PixelShader(GetGlobalShaderMap(GMaxRHIFeatureLevel));
 			FScreenPassPipelineState PipelineState(VertexShader, PixelShader);
 
-			for (int32 BatchTriangleStart = 0; BatchTriangleStart < TriangleCount; BatchTriangleStart += MaxBakeTrianglesPerPass)
+			for (const FBakeTriangleData& Triangle : TrianglePayload)
 			{
-				const int32 BatchTriangleCount = FMath::Min(MaxBakeTrianglesPerPass, TriangleCount - BatchTriangleStart);
-				const int32 SourceFloat4Offset = BatchTriangleStart * PackedFloat4sPerTriangle;
-				const int32 BatchFloat4Count = BatchTriangleCount * PackedFloat4sPerTriangle;
+				const FIntRect& Bounds = Triangle.Bounds;
+				if (Bounds.Min.X >= Bounds.Max.X || Bounds.Min.Y >= Bounds.Max.Y)
+				{
+					continue;
+				}
 
 				FBakeProjectionPS::FParameters Parameters = {};
-				for (int32 Index = 0; Index < BatchFloat4Count; ++Index)
+				for (int32 Index = 0; Index < PackedFloat4sPerTriangle; ++Index)
 				{
-					Parameters.TriangleData[Index] = TrianglePayload[SourceFloat4Offset + Index];
+					Parameters.TriangleData[Index] = Triangle.Packed[Index];
 				}
-				Parameters.TriangleCount = BatchTriangleCount;
+				Parameters.TriangleCount = 1;
 				Parameters.BakeMode = BakeMode;
 				Parameters.UseDepthTest = (BakeMode == 1 && Settings.bUseDepthTest) ? 1 : 0;
 				Parameters.UseNormalWeight = (BakeMode == 1 && Settings.bUseNormalWeight) ? 1 : 0;
@@ -276,6 +308,13 @@ static bool DispatchBakePass(
 				Parameters.DepthSampler = SourceSampler;
 				Parameters.DepthTestThreshold = Settings.DepthTestThreshold;
 
+				RHICmdList.SetScissorRect(
+					true,
+					Bounds.Min.X,
+					Bounds.Min.Y,
+					Bounds.Max.X,
+					Bounds.Max.Y);
+
 				DrawScreenPass(
 					RHICmdList,
 					ViewInfo,
@@ -289,6 +328,7 @@ static bool DispatchBakePass(
 					});
 			}
 
+			RHICmdList.SetScissorRect(false, 0, 0, 0, 0);
 			RHICmdList.EndRenderPass();
 		});
 
@@ -438,18 +478,26 @@ void UTextureBakeSubsystem::ClearBakeRenderTarget(UTextureRenderTarget2D* Render
 
 bool UTextureBakeSubsystem::BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, const FRealtimeTextureBakeSettings& Settings)
 {
-	TArray<FVector4f> PackedTriangleData;
-	int32 TriangleCount = 0;
-	if (!ExtractBakeTriangles(TargetMesh, Settings.GetClampedTargetUVChannel(), Settings.GetClampedSourceUVChannel(), PackedTriangleData, TriangleCount))
-	{
-		return false;
-	}
-
-	UWorld* World = GetWorld();
 	if (!RenderTarget)
 	{
 		return false;
 	}
+
+	TArray<FBakeTriangleData> Triangles;
+	const FIntPoint OutputExtent(RenderTarget->SizeX, RenderTarget->SizeY);
+	if (!BuildBakeTriangles(
+		TargetMesh,
+		Settings.GetClampedTargetUVChannel(),
+		Settings.GetClampedSourceUVChannel(),
+		OutputExtent,
+		false,
+		FVector3f::ZeroVector,
+		FVector3f::ForwardVector,
+		Triangles))
+	{
+		return false;
+	}
+	UWorld* World = GetWorld();
 
 	if (Settings.bAutoClear)
 	{
@@ -473,12 +521,12 @@ bool UTextureBakeSubsystem::BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, 
 		ClearBakeRenderTarget(LocalTempRenderTarget, Settings.ClearColor);
 		ClearBakeRenderTarget(LocalMaskRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 
-		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 2, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
+		if (!DispatchRasterBakePass(World, LocalMaskRenderTarget, SourceTexture, nullptr, Triangles, 2, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
 		{
 			return false;
 		}
 
-		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
+		if (!DispatchRasterBakePass(World, LocalTempRenderTarget, SourceTexture, nullptr, Triangles, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f))
 		{
 			return false;
 		}
@@ -486,7 +534,7 @@ bool UTextureBakeSubsystem::BakeUVTextureToUV(UStaticMeshComponent* TargetMesh, 
 		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, LocalMaskRenderTarget, Settings);
 	}
 
-	return DispatchBakePass(World, RenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f);
+	return DispatchRasterBakePass(World, RenderTarget, SourceTexture, nullptr, Triangles, 0, Settings, FVector3f::ZeroVector, FVector3f::ForwardVector, FVector3f::RightVector, FVector3f::UpVector, 0.0f, 1.0f);
 }
 
 bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* TargetMesh, ACameraActor* ProjectionCamera, UTexture* SourceTexture, UTextureRenderTarget2D* RenderTarget, UTextureRenderTarget2D* DepthRenderTarget, const FRealtimeTextureBakeSettings& Settings)
@@ -502,13 +550,6 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 		return false;
 	}
 
-	TArray<FVector4f> PackedTriangleData;
-	int32 TriangleCount = 0;
-	if (!ExtractBakeTriangles(TargetMesh, Settings.GetClampedTargetUVChannel(), Settings.GetClampedSourceUVChannel(), PackedTriangleData, TriangleCount))
-	{
-		return false;
-	}
-
 	FMinimalViewInfo ViewInfo;
 	CameraComponent->GetCameraView(0.0f, ViewInfo);
 	const float CameraFOV = ViewInfo.FOV;
@@ -520,11 +561,27 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 	const FVector3f CameraRight = FVector3f(CameraTransform.GetUnitAxis(EAxis::Y));
 	const FVector3f CameraUp = FVector3f(CameraTransform.GetUnitAxis(EAxis::Z));
 
-	UWorld* World = GetWorld();
 	if (!RenderTarget)
 	{
 		return false;
 	}
+
+	TArray<FBakeTriangleData> Triangles;
+	const FIntPoint OutputExtent(RenderTarget->SizeX, RenderTarget->SizeY);
+	if (!BuildBakeTriangles(
+		TargetMesh,
+		Settings.GetClampedTargetUVChannel(),
+		Settings.GetClampedSourceUVChannel(),
+		OutputExtent,
+		true,
+		CameraLocation,
+		CameraForward,
+		Triangles))
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
 
 	if (Settings.bAutoClear)
 	{
@@ -548,12 +605,12 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 		ClearBakeRenderTarget(LocalTempRenderTarget, Settings.ClearColor);
 		ClearBakeRenderTarget(LocalMaskRenderTarget, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
 
-		if (!DispatchBakePass(World, LocalMaskRenderTarget, SourceTexture, nullptr, PackedTriangleData, TriangleCount, 2, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
+		if (!DispatchRasterBakePass(World, LocalMaskRenderTarget, SourceTexture, nullptr, Triangles, 2, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
 		{
 			return false;
 		}
 
-		if (!DispatchBakePass(World, LocalTempRenderTarget, SourceTexture, DepthRenderTarget, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
+		if (!DispatchRasterBakePass(World, LocalTempRenderTarget, SourceTexture, DepthRenderTarget, Triangles, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio))
 		{
 			return false;
 		}
@@ -561,5 +618,5 @@ bool UTextureBakeSubsystem::BakeCameraProjectionToUV(UStaticMeshComponent* Targe
 		return DispatchDilationPass(World, LocalTempRenderTarget, RenderTarget, LocalMaskRenderTarget, Settings);
 	}
 
-	return DispatchBakePass(World, RenderTarget, SourceTexture, DepthRenderTarget, PackedTriangleData, TriangleCount, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio);
+	return DispatchRasterBakePass(World, RenderTarget, SourceTexture, DepthRenderTarget, Triangles, 1, Settings, CameraLocation, CameraForward, CameraRight, CameraUp, CameraFOV, CameraAspectRatio);
 }
