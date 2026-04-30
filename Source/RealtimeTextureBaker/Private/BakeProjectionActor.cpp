@@ -45,13 +45,16 @@ void ABakeProjectionActor::OnConstruction(const FTransform& Transform)
 void ABakeProjectionActor::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	BakeCurrentMode();
+	if (bAutoBake)
+	{
+		BakeCurrentMode();
+	}
 }
 
 #if WITH_EDITOR
 bool ABakeProjectionActor::ShouldTickIfViewportsOnly() const
 {
-	return BakeMode != ERealtimeTextureBakeMode::None;
+	return bAutoBake && BakeMode != ERealtimeTextureBakeMode::None;
 }
 #endif
 
@@ -115,6 +118,11 @@ UTextureRenderTarget2D* ABakeProjectionActor::AllocateDepthRenderTarget(float As
 	}
 
 	return DepthRenderTarget;
+}
+
+void ABakeProjectionActor::AllocateDepthRenderTargetEditor()
+{
+	AllocateDepthRenderTarget();
 }
 
 void ABakeProjectionActor::UpdateDepthCaptureFromProjectionCamera()
@@ -192,6 +200,11 @@ bool ABakeProjectionActor::BakeCameraProjection()
 	return BakeSubsystem && BakeSubsystem->BakeCameraProjectionToUV(TargetMeshComponent, ProjectionCamera, SourceTexture, OutputRenderTarget, DepthRenderTarget, Settings);
 }
 
+void ABakeProjectionActor::BakeCameraProjectionEditor()
+{
+	BakeCameraProjection();
+}
+
 bool ABakeProjectionActor::BakeCurrentMode()
 {
 	switch (BakeMode)
@@ -204,6 +217,11 @@ bool ABakeProjectionActor::BakeCurrentMode()
 	default:
 		return false;
 	}
+}
+
+void ABakeProjectionActor::BakeCurrentModeEditor()
+{
+	BakeCurrentMode();
 }
 
 void ABakeProjectionActor::ClearOutput()

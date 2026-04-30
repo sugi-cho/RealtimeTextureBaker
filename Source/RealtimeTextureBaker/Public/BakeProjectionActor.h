@@ -31,6 +31,9 @@ public:
 	ERealtimeTextureBakeMode BakeMode = ERealtimeTextureBakeMode::None;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
+	bool bAutoBake = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
 	AStaticMeshActor* TargetMesh = nullptr;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
@@ -51,18 +54,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Bake")
 	UTextureRenderTarget2D* OutputRenderTarget = nullptr;
 
-	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
+	UFUNCTION(BlueprintCallable, Category = "Realtime Texture Baker")
 	UTextureRenderTarget2D* AllocateDepthRenderTarget(float AspectRatio = 1.0f);
+
+	UFUNCTION(CallInEditor, Category = "Realtime Texture Baker", meta = (DisplayName = "AllocateDepthRenderTarget"))
+	void AllocateDepthRenderTargetEditor();
 
 	UTextureRenderTarget2D* AllocateRenderTarget();
 	void UpdateDepthCaptureFromProjectionCamera();
 	bool BakeUVTexture();
 
-	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
+	UFUNCTION(BlueprintCallable, Category = "Realtime Texture Baker")
 	bool BakeCameraProjection();
 
-	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
+	UFUNCTION(CallInEditor, Category = "Realtime Texture Baker", meta = (DisplayName = "BakeCameraProjection"))
+	void BakeCameraProjectionEditor();
+
+	UFUNCTION(BlueprintCallable, Category = "Realtime Texture Baker")
 	bool BakeCurrentMode();
+
+	UFUNCTION(CallInEditor, Category = "Realtime Texture Baker", meta = (DisplayName = "BakeCurrentMode"))
+	void BakeCurrentModeEditor();
 
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
 	void ClearOutput();
