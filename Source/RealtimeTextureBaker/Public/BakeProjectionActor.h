@@ -78,4 +78,12 @@ public:
 
 	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker")
 	void ClearOutput();
+
+#if WITH_EDITOR
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker", meta = (DisplayName = "Save Output Render Target As PNG"))
+	void SaveOutputRenderTargetAsPNG();
+
+	UFUNCTION(BlueprintCallable, CallInEditor, Category = "Realtime Texture Baker", meta = (DisplayName = "Save Projection Camera Render As PNG"))
+	void SaveProjectionCameraRenderAsPNG();
+#endif
 };

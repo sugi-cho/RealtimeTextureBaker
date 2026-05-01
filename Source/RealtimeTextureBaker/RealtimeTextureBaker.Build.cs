@@ -19,6 +19,7 @@ public class RealtimeTextureBaker : ModuleRules
 			new[]
 			{
 				"Projects",
+				"ImageWrapper",
 				"Renderer",
 				"RenderCore",
 				"RHI"
