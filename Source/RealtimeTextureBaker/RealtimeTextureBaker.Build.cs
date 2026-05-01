@@ -25,5 +25,19 @@ public class RealtimeTextureBaker : ModuleRules
 				"RHI"
 			}
 		);
+
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(
+				new[]
+				{
+					"AssetTools",
+					"AssetRegistry",
+					"MeshDescription",
+					"StaticMeshDescription",
+					"UnrealEd"
+				}
+			);
+		}
 	}
 }

@@ -1,54 +1,62 @@
 # RealtimeTextureBaker
 
-Unreal Engine plugin for Realtime Texture Baking and Mesh Projection.
+`BakeProjectionActor` を使って、カメラ投影系のテクスチャ出力や UV 生成を行うためのプラグインです。
 
-## ABakeProjectionActor
+## できること
 
-BP から使う場合は `BakeProjectionActor` をレベルに置き、`BakeMode`、`TargetMesh`、`ProjectionCamera`、`SourceTexture`、`Settings` を設定します。
+- `OutputRenderTarget` の内容を PNG として保存できます
+- `ProjectionCamera` の現在の描画結果を PNG として保存できます
+- `TargetMesh` に対して、`ProjectionCamera` 基準のカメラプロジェクション UV を追加した StaticMesh を生成できます
 
-### 主な関数
+## 対象ユーザー
 
-- `AllocateDepthRenderTarget(AspectRatio)`
-  - Depth 用 RenderTarget を作成します。
-  - カメラ投影焼きの前処理です。
-  - BP 用です。
-- `AllocateDepthRenderTargetEditor()`
-  - エディタ Details のボタン用です。
-  - `AllocateDepthRenderTarget()` を引数なしで呼びます。
-- `BakeCameraProjection()`
-  - カメラ投影で焼き込みます。
-  - `ProjectionCamera` と `TargetMesh` を使います。
-  - BP 用です。
-- `BakeCameraProjectionEditor()`
-  - エディタ Details のボタン用です。
-  - `BakeCameraProjection()` を呼びます。
-- `BakeCurrentMode()`
-  - `BakeMode` を見て `BakeUVTexture()` か `BakeCameraProjection()` を実行します。
-  - BP からも呼べます。
-  - BP 用です。
-- `BakeCurrentModeEditor()`
-  - エディタ Details のボタン用です。
-  - `BakeCurrentMode()` を呼びます。
-- `ClearOutput()`
-  - 出力 RenderTarget を `Settings.ClearColor` で消去します。
-  - BP とエディタ両方で使えます。
+- カメラマップ用のアタリ画像を作りたい人
+- プロジェクション結果を静止画として保存したい人
+- メッシュに投影用 UV を追加して、あとからマテリアルで使いたい人
 
-### 使い方
+## 主な機能
 
-1. `BakeMode` を `BakeUV` か `BakeCamera` に設定します。
-2. 自動実行したい場合は `bAutoBake = true` にします。
-3. 手動実行したい場合は `bAutoBake = false` にして、`BakeCurrentMode()` を押します。
-4. UV 焼きは `BakeMode = BakeUV`、カメラ投影焼きは `BakeMode = BakeCamera` を使います。
+### RenderTarget の PNG 保存
 
-### 補足
+`OutputRenderTarget` に出力された画像を PNG として保存します。
 
-- `BakeCurrentMode()` は手動実行の入口です。
-- `bAutoBake = true` のときだけ `Tick()` で自動焼きします。
+- エディタ上の Details から実行できます
+- 保存先は `Saved/RealtimeTextureBaker/` 配下です
+- ファイル名は実行した Actor 名を含む形式になります
 
-### ハマりどころ
+### ProjectionCamera の PNG 保存
 
-- `CallInEditor` のボタンは、`void` のエディタ用関数にすると出しやすいです。
-- 戻り値ありの関数は、Details にそのままボタン表示されないことがあります。
-- その場合は、`void` の `...Editor()` ラッパーを作って中で本体関数を呼びます。
-- `BlueprintCallable` は BP 呼び出し用で、Details ボタン化とは別です。
-- 変更後に Details が更新されないときは、UE の再起動が必要なことがあります。
+`ProjectionCamera` が現在見ている内容を PNG として保存します。
+
+- カメラの見た目確認や、アタリ画像の書き出しに使えます
+- 保存先は `Saved/RealtimeTextureBaker/` 配下です
+- 保存時の描画は、見た目が暗くなりにくいように調整されています
+
+### カメラプロジェクション UV の生成
+
+`TargetMesh` に対して、`ProjectionCamera` から見た投影 UV を追加した StaticMesh を生成します。
+
+- 元の UV は保持されます
+- 末尾の UV チャンネルに新しい投影 UV を追加します
+- `ProjectionCamera` の `FieldOfView` と `AspectRatio` を考慮します
+- 画面外の領域は 0-1 に clamp せず、そのまま外側へ伸びます
+- 見えない面も含めて UV を付与します
+
+## 使い方
+
+1. `BakeProjectionActor` をシーンに配置します
+2. `ProjectionCamera` を設定します
+3. `TargetMesh` や `OutputRenderTarget` を設定します
+4. Details パネルの各ボタンから必要な処理を実行します
+
+## 生成物の保存先
+
+- PNG 出力: `Saved/RealtimeTextureBaker/`
+- カメラプロジェクション UV 付き StaticMesh: 元メッシュの近くに `_CamProjUV` 付きで生成
+
+## 注意点
+
+- `ProjectionCamera` を動かした場合、投影 UV は再生成が必要です
+- カメラプロジェクション UV は、そのカメラ位置・向き・画角に依存します
+- 画面外まで伸びる UV は、用途に応じてマテリアル側で扱いを調整してください
+

@@ -19,7 +19,10 @@ public class RealtimeTextureBakerEditor : ModuleRules
 		PrivateDependencyModuleNames.AddRange(
 			new[]
 			{
+				"AssetTools",
 				"AssetRegistry",
+				"MeshDescription",
+				"StaticMeshDescription",
 				"UnrealEd"
 			}
 		);

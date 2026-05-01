@@ -16,6 +16,18 @@
 #include "RenderingThread.h"
 #include "TextureBakeSubsystem.h"
 
+#if WITH_EDITOR
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetToolsModule.h"
+#include "Engine/StaticMesh.h"
+#include "MeshDescription.h"
+#include "Modules/ModuleManager.h"
+#include "ObjectTools.h"
+#include "PackageTools.h"
+#include "StaticMeshAttributes.h"
+#include "UObject/SavePackage.h"
+#endif
+
 ABakeProjectionActor::ABakeProjectionActor()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -360,5 +372,212 @@ void ABakeProjectionActor::SaveProjectionCameraRenderAsPNG()
 	}
 
 	UE_LOG(LogTemp, Log, TEXT("RealtimeTextureBaker: Saved projection camera PNG to '%s'."), *OutputFilePath);
+}
+
+namespace
+{
+	FVector2f ProjectWorldPositionToCameraUV(
+		const FVector& WorldPosition,
+		const FTransform& CameraTransform,
+		const float HorizontalFovRadians,
+		const float AspectRatio,
+		const ECameraProjectionMode::Type ProjectionMode,
+		const float OrthoWidth)
+	{
+		const FVector CameraSpace = CameraTransform.InverseTransformPosition(WorldPosition);
+
+		if (ProjectionMode == ECameraProjectionMode::Orthographic)
+		{
+			const float SafeOrthoWidth = FMath::Max(OrthoWidth, KINDA_SMALL_NUMBER);
+			const float SafeOrthoHeight = FMath::Max(SafeOrthoWidth / FMath::Max(AspectRatio, KINDA_SMALL_NUMBER), KINDA_SMALL_NUMBER);
+			return FVector2f(
+				0.5f + static_cast<float>(CameraSpace.Y / SafeOrthoWidth),
+				0.5f - static_cast<float>(CameraSpace.Z / SafeOrthoHeight)
+			);
+		}
+
+		const float TanHalfHorizontalFov = FMath::Tan(HorizontalFovRadians * 0.5f);
+		const float SafeX = FMath::Abs(CameraSpace.X) < KINDA_SMALL_NUMBER
+			? (CameraSpace.X >= 0.0 ? KINDA_SMALL_NUMBER : -KINDA_SMALL_NUMBER)
+			: static_cast<float>(CameraSpace.X);
+		const float TanHalfVerticalFov = TanHalfHorizontalFov / FMath::Max(AspectRatio, KINDA_SMALL_NUMBER);
+
+		const float NdcX = static_cast<float>(CameraSpace.Y) / (SafeX * TanHalfHorizontalFov);
+		const float NdcY = static_cast<float>(CameraSpace.Z) / (SafeX * TanHalfVerticalFov);
+
+		return FVector2f(
+			0.5f + (NdcX * 0.5f),
+			0.5f - (NdcY * 0.5f)
+		);
+	}
+
+	void AppendCameraProjectionUV(
+		FMeshDescription& MeshDescription,
+		const FTransform& MeshTransform,
+		const FTransform& CameraTransform,
+		const float HorizontalFovRadians,
+		const float AspectRatio,
+		const ECameraProjectionMode::Type ProjectionMode,
+		const float OrthoWidth)
+	{
+	const int32 NewUVChannel = MeshDescription.GetNumUVElementChannels();
+	MeshDescription.SetNumUVChannels(NewUVChannel + 1);
+
+	FStaticMeshAttributes Attributes(MeshDescription);
+	Attributes.Register();
+	TMeshAttributesRef<FVertexInstanceID, FVector2f> VertexInstanceUVs = Attributes.GetVertexInstanceUVs();
+	if (VertexInstanceUVs.GetNumChannels() <= NewUVChannel)
+	{
+		UE_LOG(LogTemp, Error, TEXT("GenerateCameraProjectionUV: failed to add UV channel %d"), NewUVChannel);
+		return;
+	}
+
+		for (const FVertexInstanceID VertexInstanceID : MeshDescription.VertexInstances().GetElementIDs())
+		{
+			const FVertexID VertexID = MeshDescription.GetVertexInstanceVertex(VertexInstanceID);
+			const FVector WorldPosition = MeshTransform.TransformPosition(static_cast<FVector>(MeshDescription.GetVertexPosition(VertexID)));
+			const FVector2f UV = ProjectWorldPositionToCameraUV(
+				WorldPosition,
+				CameraTransform,
+				HorizontalFovRadians,
+				AspectRatio,
+				ProjectionMode,
+				OrthoWidth
+			);
+
+			VertexInstanceUVs.Set(VertexInstanceID, NewUVChannel, UV);
+		}
+	}
+}
+
+void ABakeProjectionActor::GenerateCameraProjectionUV()
+{
+	if (!TargetMesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: TargetMesh is null on BakeProjectionActor '%s'."), *GetName());
+		return;
+	}
+
+	if (!ProjectionCamera)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: ProjectionCamera is null on BakeProjectionActor '%s'."), *GetName());
+		return;
+	}
+
+	UStaticMeshComponent* TargetMeshComponent = TargetMesh->GetStaticMeshComponent();
+	if (!TargetMeshComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: TargetMesh has no StaticMeshComponent on BakeProjectionActor '%s'."), *GetName());
+		return;
+	}
+
+	UStaticMesh* SourceStaticMesh = TargetMeshComponent->GetStaticMesh();
+	if (!SourceStaticMesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: TargetMesh has no StaticMesh asset on BakeProjectionActor '%s'."), *GetName());
+		return;
+	}
+
+	UCameraComponent* CameraComponent = ProjectionCamera->GetCameraComponent();
+	if (!CameraComponent)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: ProjectionCamera has no CameraComponent on BakeProjectionActor '%s'."), *GetName());
+		return;
+	}
+
+	FMinimalViewInfo ViewInfo;
+	CameraComponent->GetCameraView(0.0f, ViewInfo);
+	const float AspectRatio = FMath::Max(ViewInfo.AspectRatio, 0.0001f);
+	const float HorizontalFovRadians = FMath::DegreesToRadians(CameraComponent->FieldOfView);
+	const FTransform CameraTransform = CameraComponent->GetComponentTransform();
+	const FTransform MeshTransform = TargetMeshComponent->GetComponentTransform();
+
+	FString UniquePackageName;
+	FString UniqueAssetName;
+	{
+		const FString SourcePackagePath = FPackageName::GetLongPackagePath(SourceStaticMesh->GetOutermost()->GetName());
+		const FString BaseAssetName = FString::Printf(TEXT("%s_CamProjUV"), *SourceStaticMesh->GetName());
+		FAssetToolsModule& AssetToolsModule = FModuleManager::LoadModuleChecked<FAssetToolsModule>(TEXT("AssetTools"));
+		AssetToolsModule.Get().CreateUniqueAssetName(
+			FPaths::Combine(SourcePackagePath, ObjectTools::SanitizeObjectName(BaseAssetName)),
+			TEXT(""),
+			UniquePackageName,
+			UniqueAssetName
+		);
+	}
+
+	UPackage* Package = CreatePackage(*UniquePackageName);
+	if (!Package)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: Failed to create package '%s'."), *UniquePackageName);
+		return;
+	}
+
+	UStaticMesh* NewStaticMesh = DuplicateObject<UStaticMesh>(SourceStaticMesh, Package, *UniqueAssetName);
+	if (!NewStaticMesh)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: Failed to duplicate StaticMesh '%s'."), *SourceStaticMesh->GetName());
+		return;
+	}
+
+	NewStaticMesh->SetFlags(RF_Public | RF_Standalone | RF_Transactional);
+	NewStaticMesh->Modify();
+
+	const int32 NumSourceModels = NewStaticMesh->GetNumSourceModels();
+	bool bAnyLODUpdated = false;
+	for (int32 LODIndex = 0; LODIndex < NumSourceModels; ++LODIndex)
+	{
+		if (!NewStaticMesh->IsMeshDescriptionValid(LODIndex))
+		{
+			continue;
+		}
+
+		FMeshDescription* MeshDescription = NewStaticMesh->GetMeshDescription(LODIndex);
+		if (!MeshDescription)
+		{
+			continue;
+		}
+
+		AppendCameraProjectionUV(
+			*MeshDescription,
+			MeshTransform,
+			CameraTransform,
+			HorizontalFovRadians,
+			AspectRatio,
+			CameraComponent->ProjectionMode,
+			CameraComponent->OrthoWidth
+		);
+		NewStaticMesh->CommitMeshDescription(LODIndex);
+		bAnyLODUpdated = true;
+	}
+
+	if (!bAnyLODUpdated)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: No valid MeshDescription found on '%s'."), *SourceStaticMesh->GetName());
+		return;
+	}
+
+	TArray<FText> BuildErrors;
+	NewStaticMesh->Build(false, &BuildErrors);
+	for (const FText& ErrorText : BuildErrors)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: %s"), *ErrorText.ToString());
+	}
+
+	NewStaticMesh->PostEditChange();
+	NewStaticMesh->MarkPackageDirty();
+	FAssetRegistryModule::AssetCreated(NewStaticMesh);
+
+	const FString Filename = FPackageName::LongPackageNameToFilename(UniquePackageName, FPackageName::GetAssetPackageExtension());
+	FSavePackageArgs SaveArgs;
+	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+	SaveArgs.SaveFlags = SAVE_NoError;
+	if (!UPackage::SavePackage(Package, NewStaticMesh, *Filename, SaveArgs))
+	{
+		UE_LOG(LogTemp, Warning, TEXT("RealtimeTextureBaker: Failed to save StaticMesh package '%s'."), *UniquePackageName);
+		return;
+	}
+
+	UE_LOG(LogTemp, Log, TEXT("RealtimeTextureBaker: Generated camera projection UV mesh '%s'."), *UniqueAssetName);
 }
 #endif
