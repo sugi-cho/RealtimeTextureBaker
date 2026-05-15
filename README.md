@@ -2,6 +2,12 @@
 
 `BakeProjectionActor` を使って、カメラ投影系のテクスチャ出力や UV 生成を行うためのプラグインです。
 
+## Author
+
+- Author: Hironori Sugino
+- Website: https://sugi.cc
+- Original Repository: https://github.com/sugi-cho/RealtimeTextureBaker
+
 ## できること
 
 - `OutputRenderTarget` の内容を PNG として保存できます
